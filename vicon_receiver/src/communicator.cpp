@@ -1,4 +1,5 @@
 #include "vicon_receiver/communicator.hpp"
+#include "vicon_receiver/utils.hpp"
 
 using namespace ViconDataStreamSDK::CPP;
 
@@ -197,13 +198,32 @@ void Communicator::get_frame()
             tf_msg.transform.translation.y = trans.Translation[0] / 1000.0;  // East (was X/East in ENU)
             tf_msg.transform.translation.z = -trans.Translation[2] / 1000.0; // Down (was -Z/Up in ENU)
 
-            // Quaternion conversion from ENU to NED
-            // Vicon quaternion order is [x, y, z, w]
-            // For NED: swap x and y components, negate z component
-            tf_msg.transform.rotation.x = quat.Rotation[1];  // was y
-            tf_msg.transform.rotation.y = quat.Rotation[0];  // was x
-            tf_msg.transform.rotation.z = -quat.Rotation[2]; // negate z
-            tf_msg.transform.rotation.w = quat.Rotation[3];  // w unchanged
+            bool METHOD1 = true;
+            if (METHOD1)
+            {
+                // Quaternion conversion from ENU to NED
+                // Vicon quaternion order is [x, y, z, w]
+                // For NED: swap x and y components, negate z component
+                tf_msg.transform.rotation.x = quat.Rotation[1];  // was y
+                tf_msg.transform.rotation.y = quat.Rotation[0];  // was x
+                tf_msg.transform.rotation.z = -quat.Rotation[2]; // negate z
+                tf_msg.transform.rotation.w = quat.Rotation[3];  // w unchanged
+            }
+            else
+            {
+                Eigen::Quaternionf quat_enu(
+                    static_cast<float>(quat.Rotation[3]), // w
+                    static_cast<float>(quat.Rotation[0]), // x
+                    static_cast<float>(quat.Rotation[1]), // y
+                    static_cast<float>(quat.Rotation[2])  // z
+                );
+                Eigen::Quaternionf q_ned = utils::enu_to_ned_via_quat_sandwich(quat_enu);
+
+                tf_msg.transform.rotation.x = q_ned.x();
+                tf_msg.transform.rotation.y = q_ned.y();
+                tf_msg.transform.rotation.z = q_ned.z();
+                tf_msg.transform.rotation.w = q_ned.w();
+            }
 
             // Publish the position data
             boost::mutex::scoped_try_lock lock(mutex);

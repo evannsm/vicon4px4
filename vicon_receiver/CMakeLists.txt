@@ -19,6 +19,9 @@ find_package(tf2_geometry_msgs REQUIRED)
 find_package(px4_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
+find_package(Eigen3 REQUIRED)
+
+
 # Generate custom messages
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/PoseEuler.msg"
@@ -103,6 +106,17 @@ set_property(TARGET Boost::thread APPEND PROPERTY
 
 ###########################################################
 # --- Node executable ---
+add_library(vicon_receiver_utils
+  src/utils.cpp
+)
+target_include_directories(vicon_receiver_utils PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+target_link_libraries(vicon_receiver_utils PUBLIC
+  Eigen3::Eigen
+)
+
 add_executable(vicon_client
   src/communicator.cpp
   src/publisher.cpp
@@ -116,6 +130,7 @@ target_include_directories(vicon_client PRIVATE
 
 # Link dependencies (use imported targets consistently)
 target_link_libraries(vicon_client
+  vicon_receiver_utils
   ViconDataStreamSDK::ViconDataStreamSDK_CPP
   Boost::system Boost::thread Boost::chrono Boost::timer
 )
@@ -164,6 +179,11 @@ install(DIRECTORY include/
 # install the node and launch files
 install(TARGETS vicon_client RUNTIME 
         DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS vicon_receiver_utils
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 
 install(DIRECTORY launch
         DESTINATION share/${PROJECT_NAME})
