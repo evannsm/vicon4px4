@@ -25,6 +25,7 @@ find_package(Eigen3 REQUIRED)
 # Generate custom messages
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/PoseEuler.msg"
+  "msg/FullState.msg"
   DEPENDENCIES std_msgs
 )
 
@@ -78,7 +79,6 @@ find_library(BOOST_TIMER_LIB
   PATHS "${BOOST_VENDOR_LIBDIR}" NO_DEFAULT_PATH REQUIRED)
 
 # Create IMPORTED targets that mimic the usual Boost::<comp> names
-# (CMake allows creating imported targets with ::)
 add_library(Boost::system SHARED IMPORTED)
 set_target_properties(Boost::system PROPERTIES
   IMPORTED_LOCATION             "${BOOST_SYSTEM_LIB}"
@@ -105,7 +105,7 @@ set_property(TARGET Boost::thread APPEND PROPERTY
   INTERFACE_LINK_LIBRARIES Threads::Threads)
 
 ###########################################################
-# --- Node executable ---
+# --- Utility library ---
 add_library(vicon_receiver_utils
   src/utils.cpp
 )
@@ -117,6 +117,8 @@ target_link_libraries(vicon_receiver_utils PUBLIC
   Eigen3::Eigen
 )
 
+###########################################################
+# --- vicon_client executable ---
 add_executable(vicon_client
   src/communicator.cpp
   src/publisher.cpp
@@ -128,7 +130,7 @@ target_include_directories(vicon_client PRIVATE
   $<INSTALL_INTERFACE:include>
 )
 
-# Link dependencies (use imported targets consistently)
+# Link dependencies
 target_link_libraries(vicon_client
   vicon_receiver_utils
   ViconDataStreamSDK::ViconDataStreamSDK_CPP
@@ -155,7 +157,63 @@ set_target_properties(vicon_client PROPERTIES
   BUILD_WITH_INSTALL_RPATH OFF
 )
 
-# --- Install: ship SDK + our headers and node ---
+###########################################################
+# --- full_state_relay executable ---
+add_executable(full_state_relay
+  src/full_state_relay.cpp
+)
+
+# Include headers
+target_include_directories(full_state_relay PRIVATE
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+
+ament_target_dependencies(full_state_relay
+  rclcpp
+  geometry_msgs
+  std_msgs
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
+  px4_msgs
+)
+
+# Link with generated messages
+target_link_libraries(full_state_relay "${cpp_typesupport_target}")
+
+# Runtime search path
+set_target_properties(full_state_relay PROPERTIES
+  INSTALL_RPATH "\$ORIGIN/../lib"
+  BUILD_WITH_INSTALL_RPATH OFF
+)
+
+###########################################################
+# --- visual_odometry_relay executable ---
+add_executable(visual_odometry_relay
+  src/visual_odometry_relay.cpp
+)
+
+# Include headers
+target_include_directories(visual_odometry_relay PRIVATE
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+
+ament_target_dependencies(visual_odometry_relay
+  rclcpp
+  geometry_msgs
+  px4_msgs
+)
+
+# Runtime search path
+set_target_properties(visual_odometry_relay PROPERTIES
+  INSTALL_RPATH "\$ORIGIN/../lib"
+  BUILD_WITH_INSTALL_RPATH OFF
+)
+
+###########################################################
+# --- Install rules ---
 include(GNUInstallDirs)
 
 # Install vendored Boost so your installed node finds the same libs at runtime
@@ -172,19 +230,26 @@ install(FILES "${VICON_SDK_LIB}"
 install(DIRECTORY "${VICON_SDK_INCLUDE_DIR}/"
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
         FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp")
-# install our public headers (so other pkgs could include vicon_receiver/… if needed)
+
+# install our public headers
 install(DIRECTORY include/
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
-# install the node and launch files
-install(TARGETS vicon_client RUNTIME 
-        DESTINATION lib/${PROJECT_NAME})
-
+# Install utility library
 install(TARGETS vicon_receiver_utils
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
 
+# Install all executables
+install(TARGETS 
+  vicon_client 
+  full_state_relay
+  visual_odometry_relay
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
+
+# Install launch files
 install(DIRECTORY launch
         DESTINATION share/${PROJECT_NAME})
 

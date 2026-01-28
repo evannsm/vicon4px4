@@ -201,6 +201,7 @@ void Communicator::get_frame()
             bool METHOD1 = true;
             if (METHOD1)
             {
+                // std::cout << "1" << std::endl;
                 // Quaternion conversion from ENU to NED
                 // Vicon quaternion order is [x, y, z, w]
                 // For NED: swap x and y components, negate z component
@@ -211,6 +212,7 @@ void Communicator::get_frame()
             }
             else
             {
+                // std::cout << "2" << std::endl;
                 Eigen::Quaternionf quat_enu(
                     static_cast<float>(quat.Rotation[3]), // w
                     static_cast<float>(quat.Rotation[0]), // x
