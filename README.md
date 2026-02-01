@@ -68,7 +68,7 @@ Assumes ROS 2 Jazzy/Humble is already installed and `rosdep` initialized.
 3. Clone the packages into `src/`:
 
     ```bash
-    git clone https://github.com/evannsm/ros2-vicon-receiver.git
+    git clone git@github.com:evannsm/ros2-vicon-receiver.git
     git clone -b v1.16_minimal_msgs git@github.com:evannsm/px4_msgs.git
     git clone git@github.com:evannsm/mocap_msgs.git
     cd ..   # back to workspace root
