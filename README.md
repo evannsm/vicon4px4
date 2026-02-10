@@ -1,31 +1,111 @@
-# Vicon receiver for ROS 2 (Evanns' Fork for PX4 NED frame and visual odometry EKF fusion)
+# Vicon Receiver for ROS 2 with PX4 External Vision Fusion
 
-**ros2-vicon-receiver** is a ROS 2 package, written in C++, that retrieves data from Vicon software and publishes it on ROS 2 topics. The code is partly derived from a mixture of [Vicon-ROS2](https://github.com/aheuillet/Vicon-ROS2) and [Vicon bridge](https://github.com/ethz-asl/vicon_bridge).
+A ROS 2 (C++) package that streams Vicon motion capture data into the PX4 EKF as an external vision source, enabling position and heading fusion for hardware flight experiments. The package converts Vicon ENU measurements to NED, publishes them as `px4_msgs/msg/VehicleOdometry` on `/fmu/in/vehicle_visual_odometry`, and handles the quaternion reordering and timestamping that PX4 expects. A secondary full-state relay node merges the fused EKF output back into a single topic for convenient logging and control.
 
-This is NOT an official ROS 2 package, but it has been successfully tested with ROS 2 Jazzy Jalisco on Ubuntu 24.04 Noble Numbat and ROS2 Humble Hawksbill on Ubuntu 22.04 Jammy Jellyfish.
+Derived from [Vicon-ROS2](https://github.com/aheuillet/Vicon-ROS2) and [Vicon bridge](https://github.com/ethz-asl/vicon_bridge). Tested with ROS 2 Jazzy Jalisco (Ubuntu 24.04) and Humble Hawksbill (Ubuntu 22.04).
+
+---
+
+## How external vision fusion works
+
+The PX4 EKF2 can fuse external position and attitude measurements (from a mocap system, VIO camera, etc.) alongside its IMU to produce smooth, drift-corrected state estimates. This package provides the complete pipeline from Vicon to EKF input:
+
+```text
+Vicon Tracker (ENU, millimeters)
+        |
+   vicon_client node
+        |  converts ENU -> NED, mm -> m
+        v
+  /vicon/drone/drone  (geometry_msgs/PoseStamped, NED)
+        |
+  visual_odometry_relay node
+        |  reorders quaternion (x,y,z,w -> w,x,y,z)
+        |  stamps with PX4-compatible microsecond timestamp
+        |  publishes at fixed 35 Hz
+        v
+  /fmu/in/vehicle_visual_odometry  (px4_msgs/VehicleOdometry)
+        |
+   PX4 EKF2 (fuses vision + IMU)
+        |
+        v
+  /fmu/out/vehicle_odometry          (fused position, velocity, attitude)
+  /fmu/out/vehicle_local_position    (fused position, velocity, acceleration)
+        |
+  full_state_relay node  [optional]
+        |  merges both into one topic at 40 Hz
+        v
+  /merge_odom_localpos/full_state_relay  (mocap_msgs/FullState)
+```
+
+For the EKF to accept vision input you must enable it on the PX4 side (the `EKF2_EV_CTRL` parameter controls which axes are fused, and `EKF2_EV_POS_X/Y/Z` sets the sensor offset if the mocap reference point differs from the vehicle body frame origin).
+
+---
+
+## Visual odometry relay (primary)
+
+The **`visual_odometry_relay`** node is the bridge between your Vicon data and the PX4 EKF. It:
+
+- Subscribes to `/vicon/drone/drone` (`geometry_msgs/msg/PoseStamped`) containing the NED-converted pose from `vicon_client`
+- Converts the ROS quaternion order (x, y, z, w) to PX4 order (w, x, y, z)
+- Sets the `pose_frame` field to `POSE_FRAME_NED` so EKF2 knows the coordinate convention
+- Timestamps each message in microseconds using the ROS clock
+- Publishes at a steady **35 Hz** on `/fmu/in/vehicle_visual_odometry` (`px4_msgs/msg/VehicleOdometry`)
+
+The fixed-rate timer decouples publishing from the Vicon callback rate; the relay always sends the most recent pose, which keeps the EKF input smooth even if individual Vicon frames arrive with jitter.
+
+### Launching for vision fusion
+
+To run the Vicon client and visual odometry relay together (the typical flight-test configuration):
+
+```bash
+ros2 launch vicon_receiver client_and_visual_odometry.launch.py \
+  hostname:=192.168.10.1
+```
+
+Or to also include the full state relay:
+
+```bash
+ros2 launch vicon_receiver client_vision_full_all.launch.py \
+  hostname:=192.168.10.1
+```
+
+---
+
+## Full state relay (secondary)
+
+The **`full_state_relay`** node is an optional convenience for downstream control and logging nodes. Instead of subscribing to two separate PX4 topics, you get one merged message containing position, velocity, acceleration, quaternion, and angular velocity.
+
+It subscribes to the fused EKF outputs:
+
+| Source topic                        | Data pulled                                      |
+| ----------------------------------- | ------------------------------------------------ |
+| `/fmu/out/vehicle_odometry`         | position, velocity, quaternion, angular velocity  |
+| `/fmu/out/vehicle_local_position`   | acceleration (ax, ay, az)                         |
+
+And publishes `mocap_msgs/msg/FullState` on `/merge_odom_localpos/full_state_relay` at **40 Hz**.
+
+A gating mechanism prevents publishing stale or low-rate data:
+
+- Both source callbacks must be arriving at >= `min_rate_hz` (default 50 Hz), tracked via exponential moving average
+- Both must have received data within `recent_timeout_sec` (default 100 ms)
+
+| Parameter            |  Type  | Default | Description                              |
+| -------------------- | -----: | ------- | ---------------------------------------- |
+| `min_rate_hz`        | double | `50.0`  | Minimum acceptable callback rate         |
+| `recent_timeout_sec` | double | `0.10`  | Maximum age of data before it's stale    |
+| `rate_ema_alpha`     | double | `0.9`   | EMA smoothing factor (higher = smoother) |
 
 ---
 
 ## Requirements
 
-- [Vicon Tracker](https://www.vicon.com/software/tracker/) running on another machine, with DataStream enabled and reachable over the network (hostname/IP).
+- [Vicon Tracker](https://www.vicon.com/software/tracker/) running on another machine, with DataStream enabled and reachable over the network (hostname/IP)
 - ROS 2 Jazzy Jalisco or Humble Hawksbill installed and sourced (at least *ros-jazzy-ros-base* and *ros-dev-tools* packages, [installation guide](https://docs.ros.org/en/jazzy/Installation.html))
-- *rosdep* initialized and updated for managing ROS 2 package dependencies ([installation guide](https://docs.ros.org/en/jazzy/Tutorials/Intermediate/Rosdep.html)) 
+- *rosdep* initialized and updated for managing ROS 2 package dependencies ([installation guide](https://docs.ros.org/en/jazzy/Tutorials/Intermediate/Rosdep.html))
 - PX4_msgs package (forked minimal version available [here](https://github.com/evannsm/px4_msgs))
 - mocap_msgs package (available [here](https://github.com/evannsm/mocap_msgs))
 
 > Note: you do not need system-wide Boost or the Vicon DataStream SDK; both are vendored per-architecture inside this repository.
-
----
-
-## What's new in this fork
-
-- **ROS 2 Jazzy and Humble** compatibility
-- **NED frame:** Transforms Vicon data to North-East-Down (NED) frame convention used by PX4/Aerospace systems
-- **Quaternion and Euler Angle outputs:** Publishes vicon NED data in both quaternion and Euler angle formats for flexibility and ease of integration using custom mocap_msgs repository
-  - (x, y, z, qw, qx, qy, qz) via `geometry_msgs/msg/PoseStamped` on `<topic>` topics
-  - (x, y, z, roll, pitch, yaw) via `vicon_receiver/msg/PoseEuler` on `<topic>_euler` topics
-- **PX4 integration:** Publishes `px4_msgs/msg/VehicleOdometry` to `/fmu/in/vehicle_visual_odometry` for direct PX4 autopilot integration
 
 ---
 
@@ -38,14 +118,25 @@ This is NOT an official ROS 2 package, but it has been successfully tested with 
 
 ---
 
-## Package layout & Executable
+## Package layout
 
-- Package name: **`vicon_receiver`**
-- Primary executable: **`vicon_client`** (C++)
-- Launch file: **`client.launch.py`**
-- Secondary executables:
-  - **'visual_odometry_relay.cpp'**: relays Vicon data to `/fmu/in/vehicle_visual_odometry` in px4_msgs/msg/VehicleOdometry message format PX4 EKF fusion for hardware experiments
-  - **'full_state_relay.cpp'**: subscibes to PX4 odometry and local position topics and combines position, velocity, acceleration, and so on into a single `px4_msgs/msg/VehicleFullState` message to be used for logging and a single subscription in PX4 control nodes.
+```text
+vicon_receiver/
+├── src/
+│   ├── communicator.cpp            # vicon_client - connects to Vicon, converts ENU->NED
+│   ├── publisher.cpp               # per-subject publisher creation
+│   ├── utils.cpp                   # frame conversion utilities
+│   ├── visual_odometry_relay.cpp   # relays NED pose to PX4 EKF (primary)
+│   └── full_state_relay.cpp        # merges EKF outputs into FullState (secondary)
+├── launch/
+│   ├── client.launch.py                      # vicon_client only
+│   ├── visual_odometry_relay.launch.py       # relay only
+│   ├── full_state_relay.launch.py            # full state only
+│   ├── client_and_visual_odometry.launch.py  # client + relay (typical flight config)
+│   └── client_vision_full_all.launch.py      # all three nodes
+└── third_party/                              # vendored Boost 1.75 & Vicon SDK 1.12
+```
+
 ---
 
 ## Quick start
@@ -90,25 +181,30 @@ Assumes ROS 2 Jazzy/Humble is already installed and `rosdep` initialized.
         -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
     ```
 
-    Notes:
-
-    - `--symlink-install` speeds iteration.
-    - `compile_commands.json` appears in the workspace root for IDE/LSP tooling.
-
-6. Source the overlay so your shell sees the built package:
+6. Source the overlay:
 
     ```bash
     source install/setup.bash
     ```
 
-7. Alter arguments in the `/launch/client.launch.py` file as needed (e.g., `hostname` to match your Vicon server) and launch
-```bash
-    ros2 launch vicon_receiver client.launch.py
-```
+7. Launch the Vicon client and visual odometry relay for PX4 fusion:
 
-8. Alternatively, you can pass parameters directly on the command line without modifying the launch file (see below for parameter details).
     ```bash
-    ros2 launch vicon_receiver client.launch.py   \
+    ros2 launch vicon_receiver client_and_visual_odometry.launch.py \
+      hostname:=192.168.10.1
+    ```
+
+    Or launch all three nodes (including full state relay):
+
+    ```bash
+    ros2 launch vicon_receiver client_vision_full_all.launch.py \
+      hostname:=192.168.10.1
+    ```
+
+8. You can pass all Vicon client parameters on the command line:
+
+    ```bash
+    ros2 launch vicon_receiver client_and_visual_odometry.launch.py \
       hostname:=192.168.10.1                      \
       topic_namespace:=vicon                      \
       buffer_size:=200                            \
@@ -119,19 +215,13 @@ Assumes ROS 2 Jazzy/Humble is already installed and `rosdep` initialized.
       map_rpy_in_degrees:=false
     ```
 
-9.  After the ros2-vicon-receiver node is running you can:
-
-   - Visualize streamed pose data in RViz2: add a TF display and/or Pose displays for the published topics.
-   - Inspect raw messages directly: `ros2 topic list`, then `ros2 topic echo /vicon/<subject_name>/<segment_name>` (adjust topic name as provided by the node).
-   - Examine the TF tree: `ros2 run tf2_tools view_frames` (generates frames.pdf) or add the TF display in RViz2 to see live transforms.
-   - Record data for later analysis: `ros2 bag record -a` to capture all topics, including the relevant Vicon topics.
-   - Monitor performance: `ros2 topic hz /vicon/<subject_name>/<segment_name>` to check update rates.
-
 ---
 
-## Node interface
+## Vicon client node
 
-### Launch arguments (convenience wrappers)
+The **`vicon_client`** node connects to Vicon Tracker, converts the ENU millimeter measurements to NED meters, and publishes per-subject pose topics plus TF.
+
+### Launch arguments
 
 | Launch arg           |    Type | Default           | Description                                                            |
 | -------------------- | ------: | ----------------- | ---------------------------------------------------------------------- |
@@ -140,132 +230,69 @@ Assumes ROS 2 Jazzy/Humble is already installed and `rosdep` initialized.
 | `topic_namespace`    |  string | `vicon`           | Namespace for all published topics                                     |
 | `world_frame`        |  string | `map`             | World frame for the tf2 transformation                                 |
 | `vicon_frame`        |  string | `vicon`           | Vicon frame for the tf2 transformation                                 |
-| `map_xyz`            | list[3] | `[0.0, 0.0, 0.0]` | XYZ translation applied when mapping Vicon frame → World frame         |
-| `map_rpy`            | list[3] | `[0.0, 0.0, 0.0]` | Roll-Pitch-Yaw rotation applied when mapping Vicon frame → World frame |
+| `map_xyz`            | list[3] | `[0.0, 0.0, 0.0]` | XYZ translation applied when mapping Vicon frame -> World frame        |
+| `map_rpy`            | list[3] | `[0.0, 0.0, 0.0]` | Roll-Pitch-Yaw rotation applied when mapping Vicon frame -> World frame|
 | `map_rpy_in_degrees` |    bool | `false`           | Interpret `map_rpy` as degrees (`true`) or radians (`false`)           |
 
-> These launch arguments pass through to node parameters (see below). Note the node parameter name for the namespace is `namespace`.
-
-### Node parameters (set with `--ros-args -p name:=value`)
-
-| Parameter            |    Type | Default           | Description                                   |
-| -------------------- | ------: | ----------------- | --------------------------------------------- |
-| `hostname`           |  string | `192.168.10.1`    | Vicon server hostname/IP                      |
-| `buffer_size`        |     int | `200`             | Internal buffer size used by the vicon client |
-| `namespace`          |  string | `vicon`           | Namespace under which topics are published    |
-| `world_frame`        |  string | `map`             | World frame for the tf2 transformation        |
-| `vicon_frame`        |  string | `vicon`           | Vicon frame for the tf2 transformation        |
-| `map_xyz`            | list[3] | `[0.0, 0.0, 0.0]` | XYZ translation applied for frame mapping     |
-| `map_rpy`            | list[3] | `[0.0, 0.0, 0.0]` | RPY rotation applied for frame mapping        |
-| `map_rpy_in_degrees` |    bool | `false`           | Interpret `map_rpy` as degrees or radians     |
+> These launch arguments pass through to node parameters. Note the node parameter name for the namespace is `namespace`.
 
 ### Published topics
 
-#### Naming scheme
-
-All topics are published under the configured `namespace` (default `vicon`) and follow this structure:
+All topics are published under the configured `namespace` (default `vicon`):
 
 ```text
-/<namespace>/<subject_name>/<segment_name>
-/<namespace>/<subject_name>/<segment_name>_euler
+/<namespace>/<subject_name>/<segment_name>         [geometry_msgs/PoseStamped]
+/<namespace>/<subject_name>/<segment_name>_euler    [mocap_msgs/PoseEuler]
 ```
 
-Examples:
+- **PoseStamped**: position (x, y, z) + quaternion (qw, qx, qy, qz) in NED
+- **PoseEuler**: position (x, y, z) + roll, pitch, yaw in radians
 
-- `/vicon/cf0/cf0` (PoseStamped with quaternion)
-- `/vicon/cf0/cf0_euler` (PoseEuler with roll/pitch/yaw)
+`<subject_name>` and `<segment_name>` are taken verbatim from Vicon Tracker.
 
-#### Message types
+### TF tree
 
-- **Pose per tracked entity:** `geometry_msgs/msg/PoseStamped` (quaternion orientation)
-- **Euler angle pose:** `vicon_receiver/msg/PoseEuler` (roll, pitch, yaw in radians)
-- **PX4 odometry:** `px4_msgs/msg/VehicleOdometry` published to `/fmu/in/vehicle_visual_odometry`
-- **TF:** dynamic transforms for each `<subject_name>_<segment_name>` frame (see TF tree section below).
-
-#### Notes
-
-- `<subject_name>` and `<segment_name>` are taken verbatim from Vicon Tracker.
-- Topic frequency depends on your Vicon system and client configuration.
-
-#### QoS
-
-- Standard reliable QoS suitable for state estimation (defaults appropriate for `PoseStamped`).
-- PX4 odometry uses BestEffort reliability with TransientLocal durability for PX4 compatibility.
-
-#### Example topic tree
-
-```bash
-/vicon/
-├── qcar/
-│   ├── qcar [geometry_msgs/PoseStamped]
-│   └── qcar_euler [vicon_receiver/PoseEuler]
-└── cf0/
-    ├── cf0 [geometry_msgs/PoseStamped]
-    └── cf0_euler [vicon_receiver/PoseEuler]
-
-/fmu/in/vehicle_visual_odometry [px4_msgs/VehicleOdometry]
-```
-
-#### Echoing topics
-
-To inspect the raw data from each topic type, use `ros2 topic echo`:
-
-```bash
-# Standard PoseStamped (quaternion orientation)
-ros2 topic echo /vicon/<subject_name>/<segment_name>
-
-# Euler angles (roll, pitch, yaw)
-ros2 topic echo /vicon/<subject_name>/<segment_name>_euler
-
-# PX4 vehicle visual odometry
-ros2 topic echo /fmu/in/vehicle_visual_odometry
-```
-
-Example with a subject named `cf0`:
-
-```bash
-ros2 topic echo /vicon/cf0/cf0
-ros2 topic echo /vicon/cf0/cf0_euler
-ros2 topic echo /fmu/in/vehicle_visual_odometry
-```
-
-## Frames & mapping
-
-- The Vicon frame → world frame mapping is configurable via `world_frame`, `vicon_frame`, `map_xyz` and `map_rpy`.
-- `map_rpy_in_degrees` lets you specify rotations in degrees when convenient.
-- Frame IDs for subjects/segments are derived from Vicon names.
-
-> Units follow ROS conventions (positions in meters, rotations in radians) in downstream consumers; ensure your system uses consistent units end-to-end.
-
-### TF tree (template + notes)
-
-The package exposes TF for tracked subjects/segments. The expected high-level tree is:
-
-```bash
-map (world frame)
+```text
+map (world_frame)
 └── vicon (vicon_frame)          [static]
     ├── <subject_1>_<segment_1>  [dynamic]
     └── <subject_2>_<segment_2>  [dynamic]
 ```
 
-#### Static transform (`map → vicon`)
+The static `map -> vicon` transform is defined by `map_xyz` and `map_rpy`. Dynamic child frames update with each Vicon measurement.
 
-- Defined via node parameters:
-  - `world_frame`: name of the world frame (default: `map`)
-  - `vicon_frame`: name of the Vicon frame (default: `vicon`)
-  - `map_xyz`: translation from `world_frame` to `vicon_frame` in meters (default: `[0.0, 0.0, 0.0]`)
-  - `map_rpy`: rotation from `world_frame` to `vicon_frame` in Roll-Pitch-Yaw angles (default: `[0.0, 0.0, 0.0]`)
-  - `map_rpy_in_degrees`: `true` if `map_rpy` is given in degrees
-- Fixed frame used in RViz: `world_frame` (recommended) or `vicon_frame`
+### Frames & mapping
 
-#### Dynamic transforms
+- The Vicon frame -> world frame mapping is configurable via `world_frame`, `vicon_frame`, `map_xyz` and `map_rpy`.
+- `map_rpy_in_degrees` lets you specify rotations in degrees when convenient.
+- Frame IDs for subjects/segments are derived from Vicon names.
 
-- One child frame per `<subject_name>_<segment_name>` populated from Vicon measurements.
+> Units follow ROS conventions (positions in meters, rotations in radians) in downstream consumers; ensure your system uses consistent units end-to-end.
 
-#### Tips
+---
 
-- Generate a TF report: `ros2 run tf2_tools view_frames` and inspect the produced PDF.
-- Ensure your static `world_frame → vicon_frame` is correct before validating child frames.
+## Example topic tree (all three nodes running)
+
+```text
+/vicon/
+├── drone/
+│   ├── drone       [geometry_msgs/PoseStamped]
+│   └── drone_euler [mocap_msgs/PoseEuler]
+
+/fmu/in/vehicle_visual_odometry          [px4_msgs/VehicleOdometry]   <- to EKF
+/merge_odom_localpos/full_state_relay    [mocap_msgs/FullState]       <- from EKF
+```
+
+```bash
+# Verify vision data is reaching PX4
+ros2 topic echo /fmu/in/vehicle_visual_odometry
+
+# Check the merged full-state output
+ros2 topic echo /merge_odom_localpos/full_state_relay
+
+# Raw Vicon pose
+ros2 topic echo /vicon/drone/drone
+```
 
 ---
 
@@ -275,13 +302,13 @@ map (world frame)
 
 <img src="docs/images/tf_tree.png" alt="TF2 frame tree for vicon_receiver" width="720">
 
-Example TF tree showing the static `world_frame → vicon_frame` transform and dynamic subject frames.
+Example TF tree showing the static `world_frame -> vicon_frame` transform and dynamic subject frames.
 
-### RViz: TF and Pose (template)
+### RViz: TF and Pose
 
 <img src="docs/images/rviz_tf_pose.png" alt="RViz visualization of TF and PoseStamped" width="720">
 
-RViz view showing TF frames and a Pose display for a tracked subject (e.g., /vicon/qcar/qcar).
+RViz view showing TF frames and a Pose display for a tracked subject.
 
 ---
 
@@ -293,13 +320,15 @@ RViz view showing TF frames and a Pose display for a tracked subject (e.g., /vic
 
 ## Troubleshooting / FAQ
 
+**EKF not fusing vision data**: Ensure `EKF2_EV_CTRL` is set to enable position and/or yaw fusion from external vision. Check that `/fmu/in/vehicle_visual_odometry` is being published at the expected rate with `ros2 topic hz`.
+
 **The node can't connect to the Vicon server**: verify `hostname` and network reachability (ping / TCP); check that Vicon Tracker is running and DataStream is enabled.
 
 **Frames look misaligned**: adjust `map_xyz` / `map_rpy` and confirm radians vs degrees via `map_rpy_in_degrees`.
 
-**I don't see TF in RViz**: confirm TF display is enabled and the fixed frame matches your global frame (`world_frame`/`vicon_frame`).
+**Full state relay not publishing**: the gating requires both `/fmu/out/vehicle_odometry` and `/fmu/out/vehicle_local_position` to arrive at >= 50 Hz. Confirm PX4 is running and the DDS/uXRCE bridge is healthy.
 
-**Which topics are produced?**: topics are under your `namespace` and reflect subject/segment names in Vicon.
+**I don't see TF in RViz**: confirm TF display is enabled and the fixed frame matches your global frame (`world_frame`/`vicon_frame`).
 
 ---
 
