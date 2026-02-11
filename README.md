@@ -1,5 +1,5 @@
 # Vicon4PX4
-### A ROS 2 Vicon → PX4 External Vision Bridge
+### A Vicon → ROS 2 → PX4 External Vision Bridge
 
 `vicon4px4` is a ROS 2 (C++) package that streams Vicon motion capture data into the PX4 EKF using External Vision fusion, enabling position and heading fusion for hardware flight experiments. The package converts Vicon ENU measurements to NED, and publishes pose data in quaternions as well as euler angles under the rigid body name as defined in Vicon Tracker.
 
