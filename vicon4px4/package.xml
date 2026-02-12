@@ -18,6 +18,7 @@
   <depend>px4_msgs</depend>
   <depend>mocap_msgs</depend>
 
+  <exec_depend>mocap_px4_relays</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
 

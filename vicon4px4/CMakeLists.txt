@@ -147,60 +147,6 @@ set_target_properties(vicon_client PROPERTIES
 )
 
 ###########################################################
-# --- full_state_relay executable ---
-add_executable(full_state_relay
-  src/full_state_relay.cpp
-)
-
-# Include headers
-target_include_directories(full_state_relay PRIVATE
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>
-)
-
-ament_target_dependencies(full_state_relay
-  rclcpp
-  geometry_msgs
-  std_msgs
-  tf2
-  tf2_ros
-  tf2_geometry_msgs
-  px4_msgs
-  mocap_msgs
-)
-
-# Runtime search path
-set_target_properties(full_state_relay PROPERTIES
-  INSTALL_RPATH "\$ORIGIN/../lib"
-  BUILD_WITH_INSTALL_RPATH OFF
-)
-
-###########################################################
-# --- visual_odometry_relay executable ---
-add_executable(visual_odometry_relay
-  src/visual_odometry_relay.cpp
-)
-
-# Include headers
-target_include_directories(visual_odometry_relay PRIVATE
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>
-)
-
-ament_target_dependencies(visual_odometry_relay
-  rclcpp
-  geometry_msgs
-  px4_msgs
-  mocap_msgs
-)
-
-# Runtime search path
-set_target_properties(visual_odometry_relay PROPERTIES
-  INSTALL_RPATH "\$ORIGIN/../lib"
-  BUILD_WITH_INSTALL_RPATH OFF
-)
-
-###########################################################
 # --- Install rules ---
 include(GNUInstallDirs)
 
@@ -230,10 +176,8 @@ install(TARGETS vicon4px4_utils
 )
 
 # Install all executables
-install(TARGETS 
-  vicon_client 
-  full_state_relay
-  visual_odometry_relay
+install(TARGETS
+  vicon_client
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 

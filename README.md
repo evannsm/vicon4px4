@@ -32,6 +32,7 @@ Assumes ROS 2 Jazzy/Humble is already installed and `rosdep` initialized.
     git clone git@github.com:evannsm/vicon4px4.git
     git clone -b v1.16_minimal_msgs git@github.com:evannsm/px4_msgs.git
     git clone git@github.com:evannsm/mocap_msgs.git
+    git clone git@github.com:evannsm/mocap_px4_relays.git
     cd ..   # back to workspace root
     ```
 
@@ -81,14 +82,16 @@ ros2 launch vicon4px4 client.launch.py
 
 In another terminal:
 ```bash
-ros2 launch vicon4px4 visual_odometry_relay.launch.py
+ros2 launch mocap_px4_relays visual_odometry_relay.launch.py
 ```
 
 And to also include the full state relay:
 
 ```bash
-ros2 launch vicon4px4 full_state_relay.launch.py
+ros2 launch mocap_px4_relays full_state_relay.launch.py
 ```
+
+> **Note:** The relay nodes have been moved to the [`mocap_px4_relays`](../mocap_px4_relays/) package so they can be reused with any motion capture source.
 
 ### Example Topic Tree (all three nodes running) assuming your rigid body is named `drone` in the Vicon Tracker app.
 
@@ -98,8 +101,8 @@ ros2 launch vicon4px4 full_state_relay.launch.py
 │   ├── drone       [geometry_msgs/PoseStamped]
 │   └── drone_euler [mocap_msgs/PoseEuler]
 
-/fmu/in/vehicle_visual_odometry          [px4_msgs/VehicleOdometry]   <- to EKF
-/merge_odom_localpos/full_state_relay    [mocap_msgs/FullState]       <- from EKF
+/fmu/in/vehicle_visual_odometry          [px4_msgs/VehicleOdometry]   <- to EKF   (mocap_px4_relays)
+/merge_odom_localpos/full_state_relay    [mocap_msgs/FullState]       <- from EKF  (mocap_px4_relays)
 ```
 
 ```bash
@@ -153,78 +156,37 @@ All topics are published under the configured `namespace` (default `vicon`):
 
 ---
 
-## Visual Odometry Relay
+## Relay nodes
 
-The **`visual_odometry_relay`** node is the bridge between your Vicon data and the PX4 EKF. It:
+The **visual_odometry_relay** and **full_state_relay** nodes have been moved to the [`mocap_px4_relays`](../mocap_px4_relays/) package so they can be reused with any motion capture source (Vicon, OptiTrack, etc.). See that package's README for full documentation.
 
-- Subscribes to `/vicon/drone/drone` (`geometry_msgs/msg/PoseStamped`) containing the NED-converted pose from `vicon_client`
-- Converts the ROS quaternion order (x, y, z, w) to PX4 order (w, x, y, z)
-- Sets the `pose_frame` field to `POSE_FRAME_NED` so EKF2 knows the coordinate convention
-- Timestamps each message in microseconds using the ROS clock
-- Publishes at a steady **35 Hz** on `/fmu/in/vehicle_visual_odometry` (`px4_msgs/msg/VehicleOdometry`) in order to avoid overwhelming the PX4 EKF and causing the board to brown out
-
-The fixed-rate timer decouples publishing from the Vicon callback rate; the relay always sends the most recent pose, which keeps the EKF input smooth even if individual Vicon frames arrive with jitter.
-
-
-### How external vision fusion works
-
-The PX4 EKF2 can fuse external position and attitude measurements (from a mocap system, VIO camera, etc.) alongside its IMU to produce smooth, drift-corrected state estimates. This package provides the complete pipeline from Vicon to EKF input:
+### Data pipeline
 
 ```text
 Vicon Tracker (ENU, millimeters)
         |
-   vicon_client node
+   vicon_client node  (vicon4px4)
         |  converts ENU -> NED, mm -> m
         v
-  /vicon/*rigid_body_name*/*rigid_body_name* & /vicon/*rigid_body_name*/*rigid_body_name_euler* (geometry_msgs/PoseStamped, NED)
+  /vicon/*rigid_body_name*/*rigid_body_name* (geometry_msgs/PoseStamped, NED)
         |
-  visual_odometry_relay node
-        |  reorders quaternion (x,y,z,w -> w,x,y,z)
-        |  stamps with PX4-compatible microsecond timestamp
-        |  publishes at fixed 35 Hz
+  visual_odometry_relay node  (mocap_px4_relays)
+        |  reorders quaternion, stamps, publishes at 35 Hz
         v
   /fmu/in/vehicle_visual_odometry  (px4_msgs/VehicleOdometry)
         |
    PX4 EKF2 (fuses vision + IMU)
         |
         v
-  /fmu/out/vehicle_odometry          (fused position, velocity, attitude, angular rate)
-  /fmu/out/vehicle_local_position    (fused position, velocity, acceleration)
+  /fmu/out/vehicle_odometry & /fmu/out/vehicle_local_position
         |
-  full_state_relay node  [optional]
+  full_state_relay node  (mocap_px4_relays)  [optional]
         |  merges both into one topic at 40 Hz
         v
   /merge_odom_localpos/full_state_relay  (mocap_msgs/FullState)
 ```
 
 For the EKF to accept vision input you must enable it on the PX4 side (the `EKF2_EV_CTRL` and `EKF2_HGT_REF` must be set up according to what your motion capture system can provide). It is also recommended to turn off magnetometer fusion to avoid issues in indoor environments.
-
----
-
-
-## Full state relay (secondary)
-
-The **`full_state_relay`** node is an optional convenience for downstream control and logging nodes. Instead of subscribing to two separate PX4 topics, you get one merged message containing position, velocity, acceleration, quaternion, and angular velocity.
-
-It subscribes to the fused EKF outputs:
-
-| Source topic                        | Data pulled                                      |
-| ----------------------------------- | ------------------------------------------------ |
-| `/fmu/out/vehicle_odometry`         | position, velocity, quaternion, angular velocity  |
-| `/fmu/out/vehicle_local_position`   | acceleration (ax, ay, az)                         |
-
-And publishes `mocap_msgs/msg/FullState` on `/merge_odom_localpos/full_state_relay` at **40 Hz**.
-
-A gating mechanism prevents publishing stale or low-rate data:
-
-- Both source callbacks must be arriving at >= `min_rate_hz` (default 50 Hz), tracked via exponential moving average
-- Both must have received data within `recent_timeout_sec` (default 100 ms)
-
-| Parameter            |  Type  | Default | Description                              |
-| -------------------- | -----: | ------- | ---------------------------------------- |
-| `min_rate_hz`        | double | `50.0`  | Minimum acceptable callback rate         |
-| `recent_timeout_sec` | double | `0.10`  | Maximum age of data before it's stale    |
-| `rate_ema_alpha`     | double | `0.9`   | EMA smoothing factor (higher = smoother) |
 
 ---
 
@@ -256,15 +218,11 @@ vicon4px4/
 ├── src/
 │   ├── communicator.cpp            # vicon_client - connects to Vicon, converts ENU->NED
 │   ├── publisher.cpp               # per-subject publisher creation
-│   ├── utils.cpp                   # frame conversion utilities
-│   ├── visual_odometry_relay.cpp   # relays NED pose to PX4 EKF (primary)
-│   └── full_state_relay.cpp        # merges EKF outputs into FullState (secondary)
+│   └── utils.cpp                   # frame conversion utilities
 ├── launch/
 │   ├── client.launch.py                      # vicon_client only
-│   ├── visual_odometry_relay.launch.py       # relay only
-│   ├── full_state_relay.launch.py            # full state only
-│   ├── client_and_visual_odometry.launch.py  # client + relay (typical flight config)
-│   └── client_vision_full_all.launch.py      # all three nodes
+│   ├── client_and_visual_odometry.launch.py  # client + relay (uses mocap_px4_relays)
+│   └── client_vision_full_all.launch.py      # all three nodes (uses mocap_px4_relays)
 └── third_party/                              # vendored Boost 1.75 & Vicon SDK 1.12
 ```
 

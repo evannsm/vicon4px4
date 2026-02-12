@@ -97,16 +97,16 @@ def generate_launch_description():
         }]
     )
 
-    # Node 2: Visual odometry relay
+    # Node 2: Visual odometry relay (from mocap_px4_relays)
     visual_odometry_relay = Node(
-        package='vicon4px4',
+        package='mocap_px4_relays',
         executable='visual_odometry_relay',
         output='screen',
     )
 
-    # Node 3: Full state relay
+    # Node 3: Full state relay (from mocap_px4_relays)
     full_state_relay = Node(
-        package='vicon4px4',
+        package='mocap_px4_relays',
         executable='full_state_relay',
         output='screen',
     )
