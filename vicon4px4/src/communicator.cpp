@@ -153,6 +153,8 @@ void Communicator::get_frame()
     // Request a new frame
     vicon_client.GetFrame();
     Output_GetFrameNumber frame_number = vicon_client.GetFrameNumber();
+    (void)frame_number;
+
 
     // Get the number of subjects in the frame
     unsigned int subject_count = vicon_client.GetSubjectCount().SubjectCount;
