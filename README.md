@@ -1,6 +1,7 @@
 # Vicon4PX4
 ### A Vicon → ROS 2 → PX4 External Vision Bridge
 ![Status](https://img.shields.io/badge/Status-Hardware_Validated-blue)
+![Vicon](https://img.shields.io/badge/Status-Client_3.7-blue)
 [![ROS 2 Humble_Compatible](https://img.shields.io/badge/ROS%202-Humble-blue)](https://docs.ros.org/en/humble/index.html)
 [![ROS 2 Jazzy_Compatible](https://img.shields.io/badge/ROS%202-Jazzy-blue)](https://docs.ros.org/en/jazzy/index.html)
 [![PX4 Compatible](https://img.shields.io/badge/PX4-Autopilot-pink)](https://github.com/PX4/PX4-Autopilot)
