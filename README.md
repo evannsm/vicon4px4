@@ -295,7 +295,8 @@ RViz view showing TF frames and a Pose display for a tracked subject.
 
 ## Website
 
-- [evannsmc.com](https://www.evannsmc.com)
+This project is part of the [evannsmc open-source portfolio](https://www.evannsmc.com/projects).
+
 - [Project page](https://www.evannsmc.com/projects/mocap4px4)
 
 ## License & attribution
